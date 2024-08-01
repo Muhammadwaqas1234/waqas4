@@ -14,9 +14,10 @@ DYNAMODB_TABLE_NAME = 'PDFContentTable'
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.secret_key = '123456789987654321'
-
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
 dynamodb = boto3.resource('dynamodb', region_name='ap-southeast-2')
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -28,20 +29,12 @@ def create_dynamodb_table(table_name):
                 {
                     'AttributeName': 'file_name',
                     'KeyType': 'HASH'  # Partition key
-                },
-                {
-                    'AttributeName': 'page_number',
-                    'KeyType': 'RANGE'  # Sort key
                 }
             ],
             AttributeDefinitions=[
                 {
                     'AttributeName': 'file_name',
                     'AttributeType': 'S'
-                },
-                {
-                    'AttributeName': 'page_number',
-                    'AttributeType': 'N'
                 }
             ],
             ProvisionedThroughput={
@@ -58,24 +51,23 @@ def create_dynamodb_table(table_name):
             print(f"Unexpected error: {e}")
             raise
 
-def insert_data_into_dynamodb(table_name, file_name, page_number, text):
+def insert_data_into_dynamodb(table_name, file_name, text):
     table = dynamodb.Table(table_name)
     table.put_item(
         Item={
             'file_name': file_name,
-            'page_number': page_number,
             'text': text
         }
     )
 
 def extract_text_from_pdf(file_path):
-    text_data = []
+    text_data = ""
     with open(file_path, 'rb') as pdf_file:
         pdf_reader = PyPDF2.PdfReader(pdf_file)
-        for page_number, page in enumerate(pdf_reader.pages):
+        for page in pdf_reader.pages:
             text = page.extract_text()
             if text:
-                text_data.append((page_number, text))
+                text_data += text
     return text_data
 
 @app.route('/', methods=['GET', 'POST'])
@@ -98,8 +90,7 @@ def upload_file():
             
             # Extract text and insert into DynamoDB
             text_data = extract_text_from_pdf(file_path)
-            for page_number, text in text_data:
-                insert_data_into_dynamodb(DYNAMODB_TABLE_NAME, filename, page_number, text)
+            insert_data_into_dynamodb(DYNAMODB_TABLE_NAME, filename, text_data)
             
             flash('File successfully uploaded and processed')
             return redirect(url_for('upload_file'))
